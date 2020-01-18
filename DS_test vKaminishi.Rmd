@@ -1,0 +1,224 @@
+---
+title: "データサイエンティスト　テスト問題"
+author: "上西　フラビオ"
+output: html_notebook
+---
+
+## 概要 (Briefing)
+サービスAを対象に、アプリのログインを促すために6/3~6/9の1週間、一部のユーザーに対してメッセージをプッシュする施策を行いました。
+
+メッセージタイプには"A"と"B"の2種類があり、それぞれ受け取るユーザー群が異なります。メッセージのプッシュ回数については1回のユーザー群と2回のユーザー群があります。
+メッセージプッシュの効果として翌週(6/10 ~ 6/16)のログイン回数が増えたことが認められれば、メッセージのプッシュを全ユーザーに展開しようと計画しています。
+
+**施策効果を比較するためにプッシュメッセージを配信してないユーザー群を対照群としたとき、今回の施策効果について分析を行ってください。**
+
+## はじめに (Tactics)
+この問題に最適な**解決策はA/Bテストです**。広義のA/Bテストは、インターネットマーケティングにおける施策の良否を判断するために、2つの施策同士を比較検討する行為全般を指す。コントロール（統制下）グループに対して、テスト（試し）グループをチャレンジさせて比較することが本来の主旨という意味である。
+そのために以下のステップを行います。
+
+## 目次 (Index)
+
+0. データロード (Data Load)
+
+1. データクレンジング/データセット前処理 (Data Cleansing)
+
+2. 探索的データ解析（Exploratory Data Analysis, a.k.a. EDA）
+
+3. 仮設検定（Hypothesis Test）
+
+4. 結論 (Conclusion)
+
+5. 最後に（Next Step)
+
+## 0) データロード (Data Load)
+必要ライブラリーのインポート。
+```{r install, message=FALSE, warning=FALSE}
+library(data.table)　# Manipulate large amount of data faster
+library(DataExplorer) # Easy EDA with data
+library(fasttime) # Convert to POSIX date format faster
+library(tidyverse) # Basic R manipulation and visualization package
+library(lubridate) # Manipulate date/time conversion
+```
+データセットをデータフレームとしてインポート。
+```{r}
+x1 = fread("user_login.csv", drop = , encoding = "UTF-8") # Data 1: Login History
+x2 = fread("experimental_design.csv", encoding = "UTF-8") # Data 2: User Group
+```
+データタイプの確認。
+```{r}
+summary(x1) # View Data 1 variables
+```
+以上に見えるように、ログイン時刻のタイムスタンプが、テキストとしてインポートされました。正しいタイプへ変更します。
+```{r}
+x1[, timestamp:=fastPOSIXct(timestamp)] # Convert Data 1 timestamp string to POSIX
+summary(x1) # View Data 1 variables
+```
+データタイプの確認。
+```{r}
+summary(x2)  # View Data 2 variables 
+```
+## 1)　データクレンジング（データセット前処理）
+ログイン回のデータベースの確認。
+```{r}
+plot_intro(x1)  # View Data 1 data type & completeness
+```
+ユーザーグループ設定のデータベースの確認。
+```{r}
+plot_intro(x2)  # View Data 2 data type & completeness
+```
+二つのデータベースをジョインします。
+```{r}
+x1[x2, on = .(user_id = user_id), `:=` (push_cnt = i.push_cnt, msg_type = i.msg_type)] # Join Data 1 with Data 2 using user_id as primay key, copying the push_cnt and msg_type to each user
+x1[] # View dataset
+```
+データベースジョインの確認をします。
+```{r}
+plot_missing(x1) # Verify join effectiveness and dataset completeness
+```
+以上をみればいくつかのミッシングポイントがあります。
+そのポイントが何かと確認します。
+```{r}
+x_missing_value = x1[is.na(x1$msg_type),] # Copy rows with error to another dataset
+x_missing_value[] # View dataset
+```
+ログインをしたこのユーザー達は、プッシュメッセージを配信をされないと共に配信される予定もなっかたのです。
+こういう時に対する選択は二つあります。一つめはデータを除くこと。二つめはデータを処理すること。
+
+一目散に考えれば予定されていないけれどデータベースに入ったユーザーは、プッシュメッセージを配信されていないユーザーと同じと考えてもよろしいでしょう。
+けれどもプッシュをするユーザーの確定基準が知れていないし、このデータベースは65万程のポイントがあるので、除くことを選択しました。
+```{r}
+x1 = x1[complete.cases(x1),] # Keep only complete rows in Data 1
+x1[] # View Data 1
+```
+データベースの確認。
+```{r}
+plot_missing(x1) # Verify Data 1 completeness
+```
+以上でデータクレンジングは終了です。
+
+## 2)　探索的データ解析（EDA）
+それではデータ解析を始まります。はじめにデータベースを把握をします。
+```{r}
+head(x1[order(user_id),]) # Preview Data 1 ordered alphabetically from user name
+```
+この様に一人のユーザーアクセスがログインした経歴が、1回1行になっています。
+プッシュメッセージは6月10日に行われたので、前日までをbeforeと名付け後日をafterと名付けます。
+それに加えて、後で仮設検定をしやすいように、メッセージとプッシュ回を新しいコルムに入れます。
+```{r}
+x1[, timeset:=factor(ifelse(timestamp >= "2019-06-10", "After", "Before"), levels = c("Before", "After"))] # Create new column considering the time distance to push notification day, creating hierarchy with labels
+x1[, group := factor(paste(msg_type, push_cnt, timeset,   sep = " - "), levels = c("None - 0 - Before",
+   "None - 0 - After", "A - 1 - Before", "A - 1 - After", "A - 2 - Before", "A - 2 - After",
+   "B - 1 - Before", "B - 1 - After", "B - 2 - Before", "B - 2 - After"))] # Combine 3 coluns to new column using ' - ' as delimiterc, creating hierarchy with labels
+plot_bar(x1) # Verify the category variables distributions
+```
+データベースの確認。
+```{r}
+summary(x1) # Verify Data 1 variable types and descriptive statistics
+```
+以上をみれば予定以外の日にちがあります（06/03~06/16)。
+それらを除いて、グループアップをしやすくするため、日付を新しいコルムへ入れます。
+```{r}
+x1[, date:=date(timestamp)]
+x1 = x1[date > "2019-06-02" & date <= "2019-06-16"]  # Remove dates before 06/02 (exclusive )and 16/06 (inclusive) 
+summary(x1)  # Verify Data 1 variable types and descriptive statistics
+```
+ですが、この状態では、ログイン回数の比較ができません。なので1日中のトータルログイン回へと変更します。
+その後、ログイン回に日にちの影響を軽減する為に、平均を計算します。
+```{r}
+x1 = x1[, .N, by=.(user_id, date, timeset, push_cnt, msg_type, group)] # Group up the Data 1, save the group counting to a new variable N., grouping by User Name and the Rows Day. Keep these columns
+x1 = x1[, .(login_mean = mean(N)), by=.(user_id, timeset, push_cnt, msg_type, group)] # Get the mean of the Group Size and save to new variable 'login_mean'. Keep these columns 
+x1[order(user_id)] # Preview Data 1 ordered alphabetically from user name
+```
+beforeログイン回とafterログイン回をデンシティ図表で比べます。
+```{r}
+ggplot(x1) + # Plot x1
+  geom_density(aes(x = login_mean, fill = factor(timeset)), alpha = 0.5) + # As density chart, 
+  labs(x = "Subset", y = "Login", title = "User login during experiment") + # Chart labels
+  theme(axis.text.x = element_text(angle = 90)) # Rotate X axis
+```
+この様にbeforeセットは一つの分布にみえます。けれどもafterセットはおおきい凸凹は三っつ程見えます。これは何故かと言いますと、いろんな分布が混ざっているからです。
+
+同じく、前のログイン回と後のログイン回を、次はボックスプロット図で比べます。
+```{r}
+ggplot(x1) + # Plot x1
+  geom_boxplot(aes(x = timeset, y = login_mean, fill = timeset)) + # Plot a boxplot chart of the mean login time per user, using group before and after, with the colors separating
+  labs(x = "Subset", y = "Login", title = "User login during experiment")  # Chart Labels
+```
+以上で見える様に、プッシュメッセージ後のログイン回は上がりました。けれどもafterの図にはプッシュメッセージを配信されていないユーザー群がいます。それに外れ値（outlier）が多すぎです。こういう時には、outlierを処理するのが最適ですが、ユーザー達の他の情報が無いので、処理はしないと判断しました。
+分析を進めてデータベースを他のグループに分かれます。
+```{r}
+ggplot(x1) + # Plot x1
+  geom_boxplot(aes(x = timeset, y = login_mean, fill = timeset)) +# Plot a boxplot chart of the mean login time per user, using group before and after, with the colors separating 
+  facet_wrap(vars(msg_type)) + # Create serveral blocks conditioned by the message type category
+  labs(x = "Subset", y = "Login", title = "User login during experiment")  # Chart labels
+```
+以上で見えるように、ログイン回が上がったのはAとBグループ。プッシュメッセージを配信されていないグループは、ほとんど変わっていません。
+それに加えて、今度はプッシュ回にて分かれ、分析を進めます。
+```{r}
+ggplot(x1) + # Plot x1
+  geom_boxplot(aes(x = group, y = login_mean, fill = timeset)) +  # Plot a boxplot chart of the mean login time per user, using group before and after, with the colors separating
+  labs(x = "Subset", y = "Login", title = "User login during experiment") + # Chart Labels
+  theme(axis.text.x = element_text(angle = 90)) # Rotate x labels
+```
+こうすれば明らかにメッセージAを配信されたユーザーが、配信されていないユーザーたちに比べて、ログイン回が上がっています。
+けれども、メッセージAが届いたユーザーたちは、すでに他のユーザーたちと比べて、ログイン回が大幅に上回っています。
+奇妙な結果ですが、これはサンプリングの時（誰にどのメッセージを配信するかを選別する時に）のビアスかもしれません。
+
+## 3) 仮設検定（hypothesis test）
+ユーザーのログイン回が上がったかどうかの仮設検定をするためには、大きく分かれて正規分布であるかどうかを規定する必要があります。
+それでは正規分布テストのためにQ-Qプロットを使います。
+```{r}
+plot_qq(x1$login_mean) # Quantile x Quantile Plot for the average daily login before and after push notification
+```
+以上のようにログイン回の分布は、ヴィジュアル的に、正規分布ではありません。
+それを確かめるために Kolmogorov-Smirnov テストを使います。
+```{r}
+ks.test(x1$login_mean[], y='pnorm') # Non parametrical normality hypothesis test for the average daily login before and after push notification
+```
+以上のように、 p-value < 2.2e-16　が５％以下なので、この正規分布の仮設は反論します。
+けれどもボックスプロット図で見えた様に、outlierが多いです。この様な状態では、線型写像（linear　transformation）を使って、データベースを正規分布に変換出来る可能性があります。
+```{r}
+x3 = x1[, x_norm := scale(login_mean, center = TRUE, scale = FALSE), by = group] # Normalize the average daily login before and after push notification
+ks.test(x3$x_norm[x3$group == "A - 1 - Before"], y='pnorm') # Non parametrical normality hypothesis test for the average daily login before and after push notification
+```
+変換をしても、正規分布には近づけませんでした。
+
+データベースが正規分布ではないから、平均比べのパラメトリック仮設検定（t検定、その他）は使えません。だから中央値比べのノンパラメトリック仮設検定（この度はウィルコクソンの順位和検定）をつかいます。
+```{r}
+wilcox.test(login_mean ~ timeset, data = x1, alternative = "less") # Non parametrical median  hypothesis test, for 2 groups, for the average daily login before and after push notification
+```
+以上のように p-value < 2.2e-16　が５％以下なのでボックスプロットで見えた様にbeforeとafterのグループのログイン回に違いがあって、afterはbeforeよりもログイン回が上がりました。どのグループが誰と違うかを定めます。
+```{r}
+pairwise.wilcox.test(x1$login_mean, x1$group) # Non parametrical median  hypothesis test, for 2 groups, versus all groups, for the average daily login before and after push notification
+```
+以上のように、 p-value が全てのグループを比べて５％以下です。この結果を理論的に考えてみれば多数の疑問が現れます。
+何故かと言うと、ヴィジュアル検査に反対して、配信されていないユーザーたちに違いがある事が異常です。この理由はoutliersのせいです。
+それに加えて、ヴィジュアル検査の際、メッセージAを配信されたユーザーは、beforeとafterをに比べて、ほとんど違いが無かった。けれども、こちらのテストでは、違いがあると示しました。
+
+## 4) 結論
+それではグループ達の統計を計算します。
+```{r}
+group_by(x1, group) %>% # With the x1, by group
+  summarise( # Resume for me with 
+    count = n(), # Size of the group
+    mean = mean(login_mean, na.rm = TRUE), # Average daily login
+    sd = sd(login_mean, na.rm = TRUE), # Standard deviation
+    median = median(login_mean, na.rm = TRUE), # Median
+    IQR = IQR(login_mean, na.rm = TRUE) # Inter quartile Size
+  )
+```
+以上で見えるように**配信してないユーザー群を対象して、ログイン回が一番上がったのは、メッセージAで１回のプッシュ回数のグループです**（３回から4.5回）。
+次いでに、beforeとafterグループを比べて、ログイン回が一番上がったのは、メッセージAで２回のプッシュ回数です。
+
+## 5) 最後に（next step)
+結論で説明した通り、ログイン回が一番上がったのは、メッセージAでプッシュ１回です。**けれども**、この結論を保つ為に、問題解決中に現れた疑問点を解決することが適用です。それらの点はなにかと言うと:
+
+* **サンプリング**:　どのユーザーがどのメッセージを配信されるかの決定理由の把握。
+
+* **外れ値**:　outlierの理由を理解して処理すること。
+
+* **他の特徴**:　ユーザーのログイン回を、前置きに、他の特徴にてグループアップして、その後に施策立案を行うこと
+
+  + このポイントは重要です。前置きに同じな行動をとるユーザー達を比べなければ、後の結論がビアスのせいで色々な疑問点が浮かびます。
+
+  + このリスクを納めるためにデータ・クラスタリングを行うことを勧めます。
