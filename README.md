@@ -26,4 +26,4 @@
 * ケースの解決については、HTMLのノートブックを参照してください。
 
 For the resolution of this case, please see the HTML Notebook in the repository.
-<a id="raw-url" href="https://github.com/fkaminishi/push_notification_test/blob/master/DS_test%20vKaminishi.nb.html"> Save link as...</a>
+<a id="raw-url" href="https://raw.githubusercontent.com/fkaminishi/push_notification_test/master/DS_test%20vKaminishi.nb.html"> Save link as...</a>
