@@ -25,4 +25,5 @@
 * ソースコード: データ解析で用いられたツールのソースコード。
 * ケースの解決については、HTMLのノートブックを参照してください。
 
-For the resolution of this case, please see the HTML Notebook in the repository.
+For the resolution of this case, please see the HTML Notebook in the repository. 
+<a id="raw-url" href="https://github.com/fkaminishi/push_notification_test/blob/master/DS_test%20vKaminishi.nb.html">Download FILE</a>
